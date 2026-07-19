@@ -1,0 +1,47 @@
+# PlatformIO generated output
+.pio/
+.pioenvs/
+.piolibdeps/
+
+# Editor and IDE state
+.vscode/
+.idea/
+
+# Local assistant/development state
+.codex/
+.agents/
+
+# Local backups and working snapshots
+backup/
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+*~
+
+# OS and machine-specific files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Local environment and secret material
+.env
+.env.*
+!.env.example
+secrets.*
+credentials.*
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Firmware/build artifacts copied outside .pio
+*.bin
+*.elf
+*.hex
+*.map
+*.lst
