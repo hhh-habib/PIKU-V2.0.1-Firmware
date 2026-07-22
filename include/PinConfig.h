@@ -24,6 +24,12 @@ namespace PinConfig {
   static constexpr int DHT_PIN = 21;
   static constexpr int MQ2_PIN = 35;
   static constexpr int BUZZER_PIN = 33;
+  static constexpr int FLAME_PIN = 36;
+  static constexpr int IR_OBSTACLE_PIN = 39;
+
+  // Reserved for future L298N ENA/ENB PWM. Do not use for sensors.
+  static constexpr int RIGHT_ENABLE_PWM_RESERVED = 25;
+  static constexpr int LEFT_ENABLE_PWM_RESERVED = 14;
 }
 
 #endif // PINCONFIG_H

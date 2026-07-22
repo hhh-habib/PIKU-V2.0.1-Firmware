@@ -14,7 +14,15 @@ public:
                        float temp,
                        float hum,
                        int gasValue,
+                       int gasFilteredValue,
+                       bool mq2Warmup,
+                       bool flameDetected,
+                       bool irObstacleDetected,
                        const String& gasStatus,
+                       const String& safetyState,
+                       const String& alarmReason,
+                       bool nearObstacleHazard,
+                       const String& nearObstacleSource,
                        const String& controlMode,
                        const String& navigationStatus);
 
@@ -27,6 +35,8 @@ private:
   String lastDisplayTemp;
   String lastDisplayHum;
   String lastDisplayGas;
+  String lastDisplaySafety;
+  String lastDisplayHazard;
   String lastDisplayScan;
   String lastDisplayMove;
   uint8_t lastFaceState;
@@ -35,12 +45,15 @@ private:
   String formatTemperature(float temp) const;
   String formatHumidity(float hum) const;
   uint16_t gasStatusColor(const String& gasStatus) const;
+  uint16_t safetyStatusColor(const String& safetyState) const;
   void drawHeader();
   void drawStaticLabel(int16_t x, int16_t y, const char* label);
   void drawDashboardFrame();
+  void drawCriticalAlert(const String& alarmReason);
+  void drawNearObstacleAlert(const String& nearObstacleSource);
   void drawValueField(int16_t x, int16_t y, int16_t w, int16_t h, const String& value, uint16_t color, uint8_t textSize);
   String shortenNavigationStatus(const String& navigationStatus) const;
-  uint8_t getFaceState(const String& gasStatus, int gasValue, bool obstacle) const;
+  uint8_t getFaceState(const String& gasStatus, int gasValue, bool obstacle, bool critical) const;
   void drawRobotFace(uint8_t faceState);
 };
 

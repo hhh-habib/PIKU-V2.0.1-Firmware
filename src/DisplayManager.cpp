@@ -22,6 +22,8 @@ DisplayManager::DisplayManager()
     lastDisplayTemp(""),
     lastDisplayHum(""),
     lastDisplayGas(""),
+    lastDisplaySafety(""),
+    lastDisplayHazard(""),
     lastDisplayScan(""),
     lastDisplayMove(""),
     lastFaceState(255) {
@@ -44,25 +46,61 @@ void DisplayManager::updateDashboard(const String& servoPos,
                                      float temp,
                                      float hum,
                                      int gasValue,
+                                     int gasFilteredValue,
+                                     bool mq2Warmup,
+                                     bool flameDetected,
+                                     bool irObstacleDetected,
                                      const String& gasStatus,
+                                     const String& safetyState,
+                                     const String& alarmReason,
+                                     bool nearObstacleHazard,
+                                     const String& nearObstacleSource,
                                      const String& controlMode,
                                      const String& navigationStatus) {
   unsigned long now = millis();
-  if (tftFrameDrawn && now - lastTftUpdateMs < RobotConfig::TFT_UPDATE_INTERVAL_MS) {
+
+  if (safetyState == "CRITICAL") {
+    if (safetyState != lastDisplaySafety || alarmReason != lastDisplayHazard ||
+        now - lastTftUpdateMs >= RobotConfig::TFT_UPDATE_INTERVAL_MS) {
+      drawCriticalAlert(alarmReason);
+      lastTftUpdateMs = now;
+      lastDisplaySafety = safetyState;
+      lastDisplayHazard = alarmReason;
+    }
     return;
   }
 
-  if (!tftFrameDrawn) {
-    drawDashboardFrame();
+  if (nearObstacleHazard) {
+    if (lastDisplaySafety != "NEAR_OBSTACLE" || nearObstacleSource != lastDisplayHazard ||
+        now - lastTftUpdateMs >= RobotConfig::TFT_UPDATE_INTERVAL_MS) {
+      drawNearObstacleAlert(nearObstacleSource);
+      lastTftUpdateMs = now;
+      lastDisplaySafety = "NEAR_OBSTACLE";
+      lastDisplayHazard = nearObstacleSource;
+    }
+    return;
   }
+
+  bool frameRedrawn = false;
+  if (!tftFrameDrawn || lastDisplaySafety == "CRITICAL" || lastDisplaySafety == "NEAR_OBSTACLE") {
+    drawDashboardFrame();
+    frameRedrawn = true;
+  }
+
+  if (!frameRedrawn && now - lastTftUpdateMs < RobotConfig::TFT_UPDATE_INTERVAL_MS) {
+    return;
+  }
+
   lastTftUpdateMs = now;
 
-  bool obstacle = distance > 0 && distance < RobotConfig::OBSTACLE_CM;
+  bool obstacle = (distance > 0 && distance < RobotConfig::OBSTACLE_CM) || irObstacleDetected;
   String distanceText = formatDistance(distance);
   String tempText = formatTemperature(temp);
   String humText = formatHumidity(hum);
   String moveText = shortenNavigationStatus(navigationStatus);
-  uint8_t faceState = getFaceState(gasStatus, gasValue, obstacle);
+  String gasText = mq2Warmup ? "WARMUP" : gasStatus;
+  String hazardText = flameDetected ? "FLAME" : (irObstacleDetected ? "IR OBS" : alarmReason);
+  uint8_t faceState = getFaceState(gasStatus, gasFilteredValue, obstacle, false);
 
   if (controlMode != lastDisplayMode) {
     drawValueField(86, 44, 132, 16, controlMode, COLOR_VALUE, 2);
@@ -80,9 +118,17 @@ void DisplayManager::updateDashboard(const String& servoPos,
     drawValueField(86, 98, 132, 16, humText, COLOR_VALUE, 2);
     lastDisplayHum = humText;
   }
-  if (gasStatus != lastDisplayGas) {
-    drawValueField(86, 116, 132, 16, gasStatus, gasStatusColor(gasStatus), 2);
-    lastDisplayGas = gasStatus;
+  if (gasText != lastDisplayGas) {
+    drawValueField(86, 116, 132, 16, gasText, gasStatusColor(gasStatus), 2);
+    lastDisplayGas = gasText;
+  }
+  if (safetyState != lastDisplaySafety) {
+    drawValueField(86, 134, 132, 12, safetyState, safetyStatusColor(safetyState), 1);
+    lastDisplaySafety = safetyState;
+  }
+  if (hazardText != lastDisplayHazard) {
+    drawValueField(166, 134, 58, 12, hazardText.substring(0, 9), safetyStatusColor(safetyState), 1);
+    lastDisplayHazard = hazardText;
   }
   if (servoPos != lastDisplayScan) {
     drawValueField(76, 158, 48, 16, servoPos, COLOR_VALUE, 1);
@@ -129,6 +175,16 @@ uint16_t DisplayManager::gasStatusColor(const String& gasStatus) const {
   return COLOR_SAFE;
 }
 
+uint16_t DisplayManager::safetyStatusColor(const String& safetyState) const {
+  if (safetyState == "CRITICAL") {
+    return COLOR_RISK;
+  }
+  if (safetyState == "CAUTION") {
+    return COLOR_CAUTION;
+  }
+  return COLOR_SAFE;
+}
+
 void DisplayManager::drawHeader() {
   tft.fillRect(0, 0, 240, 30, COLOR_HEADER);
   tft.setTextSize(2);
@@ -154,6 +210,10 @@ void DisplayManager::drawDashboardFrame() {
   drawStaticLabel(16, 80, "TEMP");
   drawStaticLabel(16, 98, "HUM");
   drawStaticLabel(16, 116, "GAS");
+  tft.setTextSize(1);
+  tft.setTextColor(COLOR_LABEL, COLOR_BG);
+  tft.setCursor(16, 134);
+  tft.print("SAFETY");
 
   tft.drawRoundRect(6, 148, 228, 34, 5, COLOR_CAUTION);
   drawStaticLabel(16, 158, "SCAN");
@@ -165,8 +225,50 @@ void DisplayManager::drawDashboardFrame() {
   lastDisplayTemp = "";
   lastDisplayHum = "";
   lastDisplayGas = "";
+  lastDisplaySafety = "";
+  lastDisplayHazard = "";
   lastDisplayScan = "";
   lastDisplayMove = "";
+  lastFaceState = 255;
+}
+
+void DisplayManager::drawCriticalAlert(const String& alarmReason) {
+  tftFrameDrawn = false;
+  tft.fillScreen(COLOR_RISK);
+  tft.setTextColor(COLOR_VALUE, COLOR_RISK);
+  tft.setTextSize(3);
+  tft.setCursor(30, 38);
+  tft.print("SAFETY");
+  tft.setCursor(36, 72);
+  tft.print("STOP");
+  tft.setTextSize(2);
+  tft.setCursor(18, 122);
+  tft.print("HAZARD:");
+  tft.setCursor(18, 150);
+  tft.print(alarmReason.substring(0, 15));
+  tft.setTextSize(1);
+  tft.setCursor(28, 210);
+  tft.print("Clear hazard to resume");
+  lastFaceState = 255;
+}
+
+void DisplayManager::drawNearObstacleAlert(const String& nearObstacleSource) {
+  tftFrameDrawn = false;
+  tft.fillScreen(COLOR_RISK);
+  tft.setTextColor(COLOR_VALUE, COLOR_RISK);
+  tft.setTextSize(2);
+  tft.setCursor(26, 42);
+  tft.print("NEAR OBSTACLE");
+  tft.setCursor(48, 72);
+  tft.print("HAZARD");
+  tft.setTextSize(2);
+  tft.setCursor(18, 122);
+  tft.print("SOURCE:");
+  tft.setCursor(18, 150);
+  tft.print(nearObstacleSource.substring(0, 15));
+  tft.setTextSize(1);
+  tft.setCursor(28, 210);
+  tft.print("Recoverable obstacle");
   lastFaceState = 255;
 }
 
@@ -186,6 +288,24 @@ String DisplayManager::shortenNavigationStatus(const String& navigationStatus) c
   if (navigationStatus == "MANUAL_RIGHT") return "RIGHT";
   if (navigationStatus == "MANUAL_STOP") return "STOP";
   if (navigationStatus == "MANUAL_OBSTACLE_STOP") return "OBS";
+  if (navigationStatus == "FORWARD_BLOCKED_IR") return "IR BLK";
+  if (navigationStatus == "SAFETY_CLEARED_STOP") return "SAFE";
+  if (navigationStatus == "AUTO_REARMED") return "AUTO";
+  if (navigationStatus == "IR_OBSTACLE_RECOVERY") return "IR REC";
+  if (navigationStatus == "IR_OBSTACLE_HOLD") return "IR HOLD";
+  if (navigationStatus == "IR_RECOVERY_COOLDOWN") return "WAIT";
+  if (navigationStatus == "IR_REVERSE") return "IR REV";
+  if (navigationStatus == "IR_SCAN_INVALID_STOP") return "NO SCN";
+  if (navigationStatus == "IR_TURN_LEFT") return "IR L";
+  if (navigationStatus == "IR_TURN_RIGHT") return "IR R";
+  if (navigationStatus == "NEAR_OBSTACLE_RECOVERY") return "NEAR";
+  if (navigationStatus == "NEAR_OBSTACLE_HOLD") return "N HOLD";
+  if (navigationStatus == "NEAR_RECOVERY_COOLDOWN") return "N WAIT";
+  if (navigationStatus == "NEAR_REVERSE") return "N REV";
+  if (navigationStatus == "NEAR_SCAN_INVALID_STOP") return "NO SCN";
+  if (navigationStatus == "NEAR_TURN_LEFT") return "N L";
+  if (navigationStatus == "NEAR_TURN_RIGHT") return "N R";
+  if (navigationStatus == "FORWARD_BLOCKED_NEAR") return "N BLK";
   if (navigationStatus == "FORWARD") return "FWD";
   if (navigationStatus == "BACKWARD") return "BACK";
   if (navigationStatus == "BACKWARD_RECOVERY") return "BACK";
@@ -196,8 +316,8 @@ String DisplayManager::shortenNavigationStatus(const String& navigationStatus) c
   return navigationStatus.substring(0, 6);
 }
 
-uint8_t DisplayManager::getFaceState(const String& gasStatus, int gasValue, bool obstacle) const {
-  if (gasStatus == "HIGH RISK" || gasValue >= RobotConfig::GAS_HIGH_RISK_THRESHOLD) {
+uint8_t DisplayManager::getFaceState(const String& gasStatus, int gasValue, bool obstacle, bool critical) const {
+  if (critical || gasStatus == "HIGH RISK" || gasValue >= RobotConfig::GAS_HIGH_RISK_THRESHOLD) {
     return 3;
   }
   if (gasStatus == "CAUTION" || gasValue >= RobotConfig::GAS_CAUTION_THRESHOLD) {

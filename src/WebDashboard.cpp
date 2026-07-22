@@ -1,6 +1,25 @@
 #include "WebDashboard.h"
 
-WebDashboard::WebDashboard() : _server(80), _initialized(false) {}
+namespace {
+  String jsonFloat(float value, int decimals) {
+    if (isnan(value)) {
+      return "null";
+    }
+    return String(value, decimals);
+  }
+
+  const char* jsonBool(bool value) {
+    return value ? "true" : "false";
+  }
+}
+
+WebDashboard::WebDashboard()
+  : _server(80),
+    _initialized(false),
+    _alarmEnabled(true),
+    _alarmMuted(false),
+    _alarmTestRequested(false),
+    _modeCommandCounter(0) {}
 
 void WebDashboard::begin(const char* ssid, const char* password) {
   WiFi.mode(WIFI_AP);
@@ -12,6 +31,9 @@ void WebDashboard::begin(const char* ssid, const char* password) {
   _server.on("/mode", [this]() { handleMode(); });
   _server.on("/turn-mode", [this]() { handleTurnMode(); });
   _server.on("/cmd", [this]() { handleCommand(); });
+  _server.on("/alarm/enable", [this]() { handleAlarmEnable(); });
+  _server.on("/alarm/mute", [this]() { handleAlarmMute(); });
+  _server.on("/alarm/test", [this]() { handleAlarmTest(); });
   _server.on("/mode/auto", [this]() { handleModeAuto(); });
   _server.on("/mode/manual", [this]() { handleModeManual(); });
   _server.on("/control/forward", [this]() { handleControlForward(); });
@@ -65,6 +87,24 @@ String WebDashboard::getTurnMode() const {
 
 String WebDashboard::getPendingCommand() const {
   return _pendingCommand;
+}
+
+bool WebDashboard::isAlarmEnabled() const {
+  return _alarmEnabled;
+}
+
+bool WebDashboard::isAlarmMuted() const {
+  return _alarmMuted || !_alarmEnabled;
+}
+
+bool WebDashboard::consumeAlarmTestRequest() {
+  bool requested = _alarmTestRequested;
+  _alarmTestRequested = false;
+  return requested;
+}
+
+unsigned long WebDashboard::modeCommandCounter() const {
+  return _modeCommandCounter;
 }
 
 IPAddress WebDashboard::localIP() const {
@@ -169,6 +209,14 @@ void WebDashboard::handleRoot() {
       }
       .alarm-indicator.caution { background:#854d0e; }
       .alarm-indicator.high { background:#991b1b; }
+      .alarm-indicator.critical {
+        background:#b91c1c;
+        box-shadow:0 0 0 2px #fecaca inset;
+      }
+      .alarm-indicator.near {
+        background:#b91c1c;
+        box-shadow:0 0 0 2px #fecaca inset;
+      }
       .dpad {
         display:grid;
         grid-template-columns:1fr 1fr 1fr;
@@ -227,8 +275,19 @@ void WebDashboard::handleRoot() {
       <div class="row"><span class="label">Temperature</span><span class="value" id="temp">--</span></div>
       <div class="row"><span class="label">Humidity</span><span class="value" id="hum">--</span></div>
       <div class="row"><span class="label">MQ2 Raw</span><span class="value" id="gas">--</span></div>
+      <div class="row"><span class="label">MQ2 Filtered</span><span class="value" id="gasFiltered">--</span></div>
+      <div class="row"><span class="label">MQ2 Warm-up</span><span class="value" id="mq2Warmup">--</span></div>
       <div class="row"><span class="label">Gas Status</span><span class="value" id="gasStatus">--</span></div>
-      <div class="alarm-indicator" id="alarmIndicator">ALARM: SAFE</div>
+      <div class="row"><span class="label">Flame</span><span class="value" id="flame">--</span></div>
+      <div class="row"><span class="label">IR Obstacle</span><span class="value" id="irObstacle">--</span></div>
+      <div class="row"><span class="label">Near Obstacle Hazard</span><span class="value" id="nearObstacle">--</span></div>
+      <div class="row"><span class="label">Near Obstacle Source</span><span class="value" id="nearSource">--</span></div>
+      <div class="row"><span class="label">Ultrasonic Warning</span><span class="value" id="ultraWarn">--</span></div>
+      <div class="row"><span class="label">Safety</span><span class="value" id="safety">--</span></div>
+      <div class="row"><span class="label">Alarm Reason</span><span class="value" id="alarmReason">--</span></div>
+      <div class="row"><span class="label">Alarm Sound</span><span class="value" id="alarmSound">--</span></div>
+      <div class="row"><span class="label">Buzzer</span><span class="value" id="buzzer">--</span></div>
+      <div class="alarm-indicator" id="alarmIndicator">SAFETY: SAFE</div>
       <div class="audio-status" id="audioStatus">AUDIO DISABLED</div>
       <div class="alarm-bar">
         <button class="alarm-btn" id="enableAlarmBtn" onclick="enableAlarm(event)">ENABLE ALARM</button>
@@ -252,7 +311,7 @@ void WebDashboard::handleRoot() {
       <div class="dpad auto" id="dpad">
         <button class="forward hold" data-move="FORWARD"><span>^</span>FORWARD</button>
         <button class="left hold" data-move="LEFT"><span>&lt;</span>LEFT</button>
-        <button class="stop" id="stopBtn"><span>■</span>STOP</button>
+        <button class="stop" id="stopBtn"><span>[]</span>STOP</button>
         <button class="right hold" data-move="RIGHT"><span>&gt;</span>RIGHT</button>
         <button class="backward hold" data-move="BACKWARD"><span>v</span>BACKWARD</button>
       </div>
@@ -373,6 +432,7 @@ void WebDashboard::handleRoot() {
         ensureAudio();
         alarmEnabled = true;
         alarmMuted = false;
+        fetch('/alarm/enable').then(() => loadData()).catch(() => {});
         if (alarmOutput && audioCtx) {
           alarmOutput.gain.cancelScheduledValues(audioCtx.currentTime);
           alarmOutput.gain.setValueAtTime(1.0, audioCtx.currentTime);
@@ -382,14 +442,21 @@ void WebDashboard::handleRoot() {
       }
       function testBeep(event) {
         if (event) event.preventDefault();
-        if (!alarmEnabled || alarmMuted) return;
         ensureAudio();
+        fetch('/alarm/test').then(() => loadData()).catch(() => {});
+        const previousEnabled = alarmEnabled;
+        const previousMuted = alarmMuted;
+        alarmEnabled = true;
+        alarmMuted = false;
         beep(900, 250, 0, 0.30);
+        alarmEnabled = previousEnabled;
+        alarmMuted = previousMuted;
       }
       function disableAlarm(event) {
         if (event) event.preventDefault();
         alarmEnabled = false;
         alarmMuted = true;
+        fetch('/alarm/mute').then(() => loadData()).catch(() => {});
         stopAlarmTimers();
         if (alarmOutput && audioCtx) {
           alarmOutput.gain.cancelScheduledValues(audioCtx.currentTime);
@@ -397,26 +464,45 @@ void WebDashboard::handleRoot() {
         }
         setAudioStatus('ALARM MUTED');
       }
-      function updateAlarm(status) {
+      function updateAlarm(status, safety, reason, nearObstacle, nearSource) {
         const indicator = document.getElementById('alarmIndicator');
-        indicator.textContent = 'ALARM: ' + status;
+        if (safety === 'CRITICAL') {
+          indicator.textContent = safety + (reason && reason !== 'NONE' ? ': ' + reason : '');
+        } else if (nearObstacle) {
+          indicator.textContent = 'NEAR OBSTACLE HAZARD: ' + nearSource;
+        } else {
+          indicator.textContent = safety + (reason && reason !== 'NONE' ? ': ' + reason : '');
+        }
         indicator.className = 'alarm-indicator';
-        if (status === 'CAUTION') indicator.classList.add('caution');
+        if (safety === 'CAUTION' || status === 'CAUTION') indicator.classList.add('caution');
         if (status === 'HIGH RISK') indicator.classList.add('high');
+        if (safety === 'CRITICAL') indicator.classList.add('critical');
+        if (nearObstacle && safety !== 'CRITICAL') indicator.classList.add('near');
 
-        if (status === 'SAFE') {
+        if (safety === 'SAFE' && status === 'SAFE' && !nearObstacle) {
           stopAlarmTimers();
           return;
         }
         if (!alarmEnabled || alarmMuted) return;
         ensureAudio();
-        if (status === 'CAUTION') {
+        if (nearObstacle && safety !== 'CRITICAL') {
+          if (!highRiskTimer) {
+            urgentDoubleBeep();
+            vibrateHighRisk();
+            highRiskTimer = setInterval(() => {
+              urgentDoubleBeep();
+            }, 900);
+            highRiskVibeTimer = setInterval(() => {
+              vibrateHighRisk();
+            }, 1200);
+          }
+        } else if (safety === 'CAUTION' || status === 'CAUTION') {
           stopAlarmTimers();
           if (Date.now() - lastCautionBeep > 5000) {
             lastCautionBeep = Date.now();
             beep(560, 160, 0, 0.25);
           }
-        } else if (status === 'HIGH RISK' && !highRiskTimer) {
+        } else if (safety === 'CRITICAL' && !highRiskTimer) {
           urgentDoubleBeep();
           vibrateHighRisk();
           highRiskTimer = setInterval(() => {
@@ -429,11 +515,27 @@ void WebDashboard::handleRoot() {
       }
       function loadData() {
         fetch('/data').then(r => r.json()).then(d => {
-          document.getElementById('temp').textContent = d.temperature + ' C';
-          document.getElementById('hum').textContent = d.humidity + ' %';
+          document.getElementById('temp').textContent = d.temperature === null ? '-- C' : d.temperature + ' C';
+          document.getElementById('hum').textContent = d.humidity === null ? '-- %' : d.humidity + ' %';
           document.getElementById('gas').textContent = d.gasValue;
+          document.getElementById('gasFiltered').textContent = d.gasFilteredValue;
+          document.getElementById('mq2Warmup').textContent = d.mq2Warmup ? 'WARMING' : 'READY';
           document.getElementById('gasStatus').textContent = d.gasStatus;
-          document.getElementById('dist').textContent = d.distance + ' cm';
+          document.getElementById('flame').textContent = d.flameDetected ? 'DETECTED' : 'CLEAR';
+          document.getElementById('irObstacle').textContent = d.irObstacleDetected ? 'DETECTED' : 'CLEAR';
+          document.getElementById('nearObstacle').textContent = d.nearObstacleHazard ? 'ACTIVE' : 'CLEAR';
+          document.getElementById('nearSource').textContent = d.nearObstacleSource;
+          document.getElementById('ultraWarn').textContent = d.ultrasonicWarning ? 'WARNING' : 'CLEAR';
+          document.getElementById('safety').textContent = d.safetyState;
+          document.getElementById('alarmReason').textContent = d.alarmReason;
+          document.getElementById('alarmSound').textContent = d.alarmSoundState;
+          document.getElementById('buzzer').textContent = d.buzzerState;
+          if (d.alarmSoundState === 'MUTED') {
+            alarmEnabled = false;
+            alarmMuted = true;
+            stopAlarmTimers();
+          }
+          document.getElementById('dist').textContent = d.distanceValid ? d.distance + ' cm' : '-- cm';
           document.getElementById('motor').textContent = d.motorState;
           document.getElementById('nav').textContent = d.navigationDecision;
           document.getElementById('mode').textContent = d.mode;
@@ -442,7 +544,7 @@ void WebDashboard::handleRoot() {
           turnMode = d.turnMode;
           updateModeButtons();
           updateTurnModeButton();
-          updateAlarm(d.gasStatus);
+          updateAlarm(d.gasStatus, d.safetyState, d.alarmReason, d.nearObstacleHazard, d.nearObstacleSource);
         });
       }
       document.querySelectorAll('.hold').forEach(btn => {
@@ -533,6 +635,23 @@ void WebDashboard::handleCommand() {
   sendOk();
 }
 
+void WebDashboard::handleAlarmEnable() {
+  _alarmEnabled = true;
+  _alarmMuted = false;
+  sendOk();
+}
+
+void WebDashboard::handleAlarmMute() {
+  _alarmEnabled = false;
+  _alarmMuted = true;
+  sendOk();
+}
+
+void WebDashboard::handleAlarmTest() {
+  _alarmTestRequested = true;
+  sendOk();
+}
+
 void WebDashboard::handleModeAuto() {
   applyMode("AUTO");
   sendOk();
@@ -571,6 +690,7 @@ void WebDashboard::handleControlStop() {
 void WebDashboard::applyMode(const String& mode) {
   _data.controlMode = mode;
   _pendingCommand = "";
+  _modeCommandCounter++;
 }
 
 void WebDashboard::applyTurnMode(const String& mode) {
@@ -588,14 +708,28 @@ void WebDashboard::sendOk() {
 }
 
 void WebDashboard::sendJson() {
-  String json = "{\"mode\":\"" + _data.controlMode + "\"" +
-                ",\"turnMode\":\"" + _data.turnMode + "\"" +
-                ",\"distance\":" + String(_data.frontDistance, 1) +
-                ",\"temperature\":" + String(_data.temperature, 1) +
-                ",\"humidity\":" + String(_data.humidity, 1) +
-                ",\"gasValue\":" + String(_data.gasValue) +
-                ",\"gasStatus\":\"" + _data.gasStatus + "\"" +
-                ",\"motorState\":\"" + _data.motorState + "\"" +
-                ",\"navigationDecision\":\"" + _data.navigationDecision + "\"}";
+  String json;
+  json.reserve(520);
+  json = "{\"mode\":\"" + _data.controlMode + "\"" +
+         ",\"turnMode\":\"" + _data.turnMode + "\"" +
+         ",\"distance\":" + jsonFloat(_data.frontDistance, 1) +
+         ",\"distanceValid\":" + jsonBool(_data.distanceValid) +
+         ",\"temperature\":" + jsonFloat(_data.temperature, 1) +
+         ",\"humidity\":" + jsonFloat(_data.humidity, 1) +
+         ",\"gasValue\":" + String(_data.gasValue) +
+         ",\"gasFilteredValue\":" + String(_data.gasFilteredValue) +
+         ",\"mq2Warmup\":" + jsonBool(_data.mq2Warmup) +
+         ",\"gasStatus\":\"" + _data.gasStatus + "\"" +
+         ",\"flameDetected\":" + jsonBool(_data.flameDetected) +
+         ",\"irObstacleDetected\":" + jsonBool(_data.irObstacleDetected) +
+         ",\"nearObstacleHazard\":" + jsonBool(_data.nearObstacleHazard) +
+         ",\"nearObstacleSource\":\"" + _data.nearObstacleSource + "\"" +
+         ",\"ultrasonicWarning\":" + jsonBool(_data.ultrasonicWarning) +
+         ",\"safetyState\":\"" + _data.safetyState + "\"" +
+         ",\"alarmReason\":\"" + _data.alarmReason + "\"" +
+         ",\"alarmSoundState\":\"" + _data.alarmSoundState + "\"" +
+         ",\"buzzerState\":\"" + _data.buzzerState + "\"" +
+         ",\"motorState\":\"" + _data.motorState + "\"" +
+         ",\"navigationDecision\":\"" + _data.navigationDecision + "\"}";
   _server.send(200, "application/json", json);
 }
