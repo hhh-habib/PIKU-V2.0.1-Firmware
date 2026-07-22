@@ -6,7 +6,7 @@
 - Release name: `Enhanced Inspection, Safety and Obstacle Recovery Upgrade`
 - Board target: `esp32doit-devkit-v1`
 - Framework: Arduino through PlatformIO
-- Repository: `PIKU-V2-Firmware`
+- Repository: `PIKU-V2.0.1-Firmware`
 
 PIKU V2.0.1 is a stable PIKU 2.0 firmware upgrade. It must not be described as PIKU 2.1.
 
@@ -94,6 +94,7 @@ The build result for the final committed release is recorded in the maintainer h
 - IR detection distance is hardware-potentiometer dependent and should be tuned on the installed module.
 - Some autonomous recovery actions still use short motor/servo timing waits, with responsive service-loop calls around longer waits.
 - Slight forward drift noted in the earlier stable baseline remains a motor/mechanical tuning item.
+- This firmware is not a certified industrial life-safety system.
 
 ## Release Readiness Checklist
 

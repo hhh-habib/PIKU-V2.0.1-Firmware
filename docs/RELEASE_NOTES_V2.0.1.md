@@ -37,6 +37,7 @@ Dashboard test beep requests both a browser-side test sound and a short physical
 - MQ-2 calibration is still required after validating the GPIO35 voltage-divider behavior.
 - The IR sensor detection distance should be tuned physically using the sensor potentiometer.
 - The circuit diagram has not yet been updated for this release.
+- This release is prototype firmware and is not a certified industrial life-safety device.
 
 ## Build Target
 

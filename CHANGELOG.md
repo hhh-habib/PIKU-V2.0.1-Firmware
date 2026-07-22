@@ -30,5 +30,6 @@
 
 ### Documentation Notes
 
+- Repository identity finalized as `PIKU-V2.0.1-Firmware`.
 - Circuit diagram update is still pending.
 - Research paper update tasks are tracked separately in `docs/RESEARCH_PAPER_UPDATE_TODO.md`.
